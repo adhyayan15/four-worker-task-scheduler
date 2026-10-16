@@ -1,0 +1,33 @@
+name: RTL simulation tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  icarus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Test busy worker
+        run: |
+          iverilog -g2012 -s busy_worker_tb -o busy_sim.vvp busy_worker.v tests/busy_worker_tb.v
+          vvp busy_sim.vvp
+      - name: Test FIFO
+        run: |
+          iverilog -g2012 -s task_fifo_tb -o fifo_sim.vvp task_fifo.v tests/task_fifo_tb.v
+          vvp fifo_sim.vvp
+      - name: Test parallel scheduler
+        run: |
+          iverilog -g2012 -s parallel_scheduler_tb -o parallel_sim.vvp busy_worker.v parallel_scheduler.v tests/parallel_scheduler_tb.v
+          vvp parallel_sim.vvp
+      - name: Test queued scheduler
+        run: |
+          iverilog -g2012 -s queued_scheduler_tb -o queued_sim.vvp busy_worker.v parallel_scheduler.v task_fifo.v queued_scheduler.v tests/queued_scheduler_tb.v
+          vvp queued_sim.vvp
+      - name: Test original round robin
+        run: |
+          iverilog -g2012 -s four_worker_scheduler_tb -o round_sim.vvp examples/scheduler.v examples/four_worker_scheduler.v examples/four_worker_scheduler_tb.v
+          vvp round_sim.vvp
