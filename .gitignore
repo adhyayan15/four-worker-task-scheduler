@@ -1,0 +1,21 @@
+# Compiled Verilog simulations and waveform outputs
+*.vvp
+*.vcd
+*.fst
+*.lxt
+*.lxt2
+
+# Generated task data
+user_tasks.hex
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editor / OS artifacts
+.vscode/
+.DS_Store
+Thumbs.db
