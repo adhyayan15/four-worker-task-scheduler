@@ -1,47 +1,58 @@
-# Four-Worker Task Scheduler (Verilog)
+# Four-Worker Task Scheduler
 
-A simulation-based **four-worker task scheduler** built in Verilog, with a four-entry FIFO, ready/valid flow control, busy-aware round-robin dispatch, independent worker execution, and an interactive Python test runner.
+### Learning how to schedule work in hardware, one clock cycle at a time
 
-The current processing operation is **unsigned 8-bit addition** (`A + B`, with a 9-bit result). It is a digital design and verification project—not a CPU/GPU implementation or an FPGA throughput benchmark.
+I built this because I wanted to understand what **parallel execution** looks like at the RTL level, not just in a Python program.
 
-## Architecture
+I started with a single Verilog worker that added two numbers. Then I made four copies and rotated incoming tasks between them. That worked, but it wasn't very interesting: the workers finished almost immediately, so there was no real decision to make about who was free.
 
-```mermaid
-flowchart LR
-    IN["Task input<br/>valid / ready<br/>A[7:0], B[7:0]"] --> FIFO["4-entry FIFO<br/>16-bit tasks"]
-    FIFO --> SCH["Busy-aware<br/>round-robin dispatcher"]
-    SCH --> W0["Worker 0"]
-    SCH --> W1["Worker 1"]
-    SCH --> W2["Worker 2"]
-    SCH --> W3["Worker 3"]
-    W0 --> OUT["Results +<br/>done_mask"]
-    W1 --> OUT
-    W2 --> OUT
-    W3 --> OUT
+The project got more interesting when I gave each worker a **busy state** and a simulated processing delay. Now the scheduler needed to find an available worker. And when all four were busy, I needed somewhere for new tasks to wait. That's why I added the FIFO.
+
+## What it does now
+
+```text
+               New tasks (A, B)
+                       |
+                  4-slot FIFO
+                       |
+           Busy-aware round robin
+              /    /    \    \
+             W0   W1    W2   W3
+              \    \    /    /
+             Individual results
 ```
 
-Each worker latches the sum at acceptance and **models a five-cycle busy interval** before asserting `done` for one cycle. This is simulated task latency, *not* a five-cycle arithmetic pipeline. The scheduler skips busy workers, and a queued task waits until a worker can accept it.
+Each worker currently performs **8-bit unsigned addition**, producing a **9-bit result**. I used addition to keep the computation simple and focus on scheduling, handshakes, and verifying what happens over time.
 
-## Features
+The system has:
 
-- Four independent workers and a **busy-aware round-robin** dispatcher
-- Four-slot, first-in-first-out input queue
-- Input backpressure (`in_valid` / `in_ready` handshake)
-- Per-worker `busy_mask`, `done_mask`, and 9-bit result lanes
-- Directed module/integration testbenches and VCD waveform traces
-- Interactive custom-task entry, output verification, and simulated performance reporting
+- **Four independent workers** that can all be busy at the same time.
+- **Round-robin selection** that skips workers already processing something.
+- **A four-entry FIFO** so incoming tasks can wait their turn.
+- **Ready/valid signals** so a sender knows when the queue is full.
+- **Done and busy masks** to inspect worker activity in simulation.
 
-## Quick start (Windows / MSYS2 UCRT64 / VS Code)
+Only one new task can be dispatched per clock cycle. The workers model a five-cycle busy interval; they're **not** five-stage pipelined adders.
 
-Requires **Python 3**, **Icarus Verilog** (`iverilog` and `vvp`), and optionally **GTKWave**. Ensure they are on your terminal's PATH.
+## The part I liked testing
 
-In MSYS2 UCRT64, install tools if necessary:
+At first, I was just checking whether `15 + 20` came back as `35`. Later I was watching all four `busy` bits go high in GTKWave, sending another task, and checking that the scheduler held it in the queue instead of losing it.
+
+The [integration testbench](tests/queued_scheduler_tb.v) exercised **20 tasks**, including FIFO ordering, blocked inputs, worker reuse, and overlapping execution. All 20 were accepted, dispatched, and completed in that run.
+
+I also wrote a Python runner so you don't have to edit Verilog every time you want to try different numbers.
+
+## Try your own tasks
+
+You'll need **Python 3** and **Icarus Verilog**. GTKWave is optional but useful for seeing the clock-by-clock behavior. I used VS Code on Windows with MSYS2 UCRT64.
+
+If you need Icarus Verilog and GTKWave in MSYS2:
 
 ```bash
 pacman -S mingw-w64-ucrt-x86_64-iverilog mingw-w64-ucrt-x86_64-gtkwave
 ```
 
-Clone and run from the repository root:
+Then, from a terminal that can find `iverilog` and `vvp`:
 
 ```bash
 git clone https://github.com/adhyayan15/four-worker-task-scheduler.git
@@ -49,7 +60,7 @@ cd four-worker-task-scheduler
 python run_tasks.py
 ```
 
-Example input:
+Example session:
 
 ```text
 Task 1 (A B / run): 22 33
@@ -58,63 +69,41 @@ Task 3 (A B / run): 89 73
 Task 4 (A B / run): run
 ```
 
-The script generates `user_tasks.hex`, compiles the RTL and testbench with `iverilog`, runs the design with `vvp`, checks each result, and writes `interactive_wave.vcd`. If GTKWave is installed, it offers to open the waveform. Input: **1–256 tasks**, two unsigned numbers from **0–255** per task.
+The program compiles the Verilog, checks the returned sums, reports simulation metrics, and offers to open the waveform in GTKWave. Enter up to **256 tasks**, with numbers from **0 to 255**.
 
-## Verification
+## Numbers from one example run
 
-To run directed tests manually from the repository root:
+For the three tasks above:
 
-```bash
-iverilog -g2012 -s busy_worker_tb -o busy_sim.vvp busy_worker.v tests/busy_worker_tb.v
-vvp busy_sim.vvp
+| Measured in simulation | Result |
+| --- | ---: |
+| Tasks completed correctly | 3 / 3 |
+| Average input-to-completion latency | 6 clock cycles (60 ns) |
+| Elapsed workload interval | 9 cycles (90 ns) |
+| Average worker utilization | 41.7% |
+| Peak queue depth | 1 of 4 |
+| Backpressure | 0 cycles |
 
-iverilog -g2012 -s task_fifo_tb -o fifo_sim.vvp task_fifo.v tests/task_fifo_tb.v
-vvp fifo_sim.vvp
+The script also reports **33.33 million tasks/sec at an assumed 100 MHz clock** for that short example. That is *not* FPGA-measured throughput and definitely not a sustained real-hardware benchmark. I haven't synthesized this design or run it on a physical FPGA.
 
-iverilog -g2012 -s parallel_scheduler_tb -o parallel_sim.vvp busy_worker.v parallel_scheduler.v tests/parallel_scheduler_tb.v
-vvp parallel_sim.vvp
+## Looking through the code
 
-iverilog -g2012 -s queued_scheduler_tb -o queued_sim.vvp busy_worker.v parallel_scheduler.v task_fifo.v queued_scheduler.v tests/queued_scheduler_tb.v
-vvp queued_sim.vvp
-```
+If you're new to Verilog, these are the useful files to open in order:
 
-An additional integration testbench (`user_tasks_tb.v`) checks FIFO ordering and per-task results from a user-created task file. See [Verification](docs/VERIFICATION.md).
+1. [busy_worker.v](busy_worker.v) — one worker with a result, busy flag, and completion signal.
+2. [parallel_scheduler.v](parallel_scheduler.v) — chooses which worker gets the next task.
+3. [task_fifo.v](task_fifo.v) — stores tasks when they can't be dispatched yet.
+4. [queued_scheduler.v](queued_scheduler.v) — connects the queue to the scheduler.
+5. [user_tasks_tb.v](user_tasks_tb.v) and [run_tasks.py](run_tasks.py) — the interactive simulation.
 
-## Observed simulation results
+I kept my [earlier experiments](examples/) too, so it's possible to follow how the design changed. The [testbenches](tests/) cover individual modules and the complete system.
 
-These are from uploaded simulation output and VCD files, **not hardware measurements**.
+For manual compile/run commands and more detail, see [verification](docs/VERIFICATION.md), [architecture](docs/ARCHITECTURE.md), and [performance notes](docs/PERFORMANCE.md). The repository also includes a GitHub Actions test workflow.
 
-| Experiment | Observation |
-| --- | --- |
-| Queued integration simulation | **20 accepted / 20 dispatched / 20 completed** |
-| Interactive example (3 tasks) | **3 / 3 correct results** |
-| Interactive example average end-to-end latency | **6 cycles / 60 ns** |
-| Interactive example elapsed time | **9 simulated cycles / 90 ns** |
-| Interactive example throughput at **assumed 100 MHz** | **33.33 million tasks/s** |
-| Interactive example worker utilization | **41.7%** |
-| Interactive example peak FIFO use | **1 of 4 entries** |
+## What I'd improve
 
-The 100 MHz clock comes from the testbench's 10 ns period. No synthesis, place-and-route, FPGA deployment, timing closure, or power analysis has been performed. Results depend on workload size and spacing, and short three-task averages should not be interpreted as sustained throughput. See [Performance and limitations](docs/PERFORMANCE.md).
+The workers only add numbers right now. Next I'd like to support different operations, run larger and more varied workloads, and synthesize the RTL so I can see how much actual hardware it needs.
 
-## Repository layout
+What this project really taught me is that distributing tasks isn't just picking a worker. You also have to decide **when a task is accepted, what happens when everything is busy, and how to prove no result got lost**.
 
-```text
-busy_worker.v                 Latency-modeled arithmetic worker
-parallel_scheduler.v          Round-robin, busy-aware dispatcher
-task_fifo.v                   Four-entry task FIFO
-queued_scheduler.v            Integrated FIFO + dispatcher + workers
-run_tasks.py                  Interactive CLI runner
-user_tasks_tb.v               Self-checking custom workload testbench
-tests/                       Directed unit and integration testbenches
-examples/                    Earlier single-worker and round-robin stages
-docs/                        Architecture, verification, and metrics
-.github/workflows/            Continuous simulation checks
-```
-
-## Learnings and next steps
-
-**Demonstrated:** RTL module composition, sequential logic, handshakes and backpressure, arbitration, FIFO control, independent task execution, self-checking simulation, VCD waveform analysis, and basic workload metrics.
-
-**Potential next steps:** configurable arithmetic/logic operations, parameterized worker/queue counts, longer randomized tests, synthesis with Yosys, and timing/resource analysis on a target FPGA.
-
-For design trade-offs and known limitations, read [Architecture](docs/ARCHITECTURE.md). This repository intentionally omits generated `.vvp`/`.vcd` files from version control: regenerate them using the supplied scripts and testbenches.
+Built by **Adhyayan Tiwari**.
